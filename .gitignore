@@ -1,0 +1,41 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment Variables & Secrets
+.env
+.dhan_token
+token.pickle
+
+# Application State & Local Caches
+.margin_cache.json
+data/ghost_snapshot.json
+data/capital_state.json
+
+# Local Databases & Logs
+*.db
+*.sqlite3
+logs/
+*.log
+*.log.*
+*.log.gz
+
+# Data Stores (Large files)
+data_store/raw_csv/**/*.csv
+data_store/parquet/**/*.parquet
+*.parquet
+*.csv
+
+# IDEs & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
