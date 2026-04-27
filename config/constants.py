@@ -88,7 +88,7 @@ GST_RATE = 0.18
 # Source: RBI press release
 # Update after every Tuesday RBI T-bill auction:
 # rbi.org.in → Press Releases → Treasury Bill Auction Results
-DEFAULT_RISK_FREE_RATE = 0.053064
+DEFAULT_RISK_FREE_RATE = 0.0521
 
 # --- Macro Events ---
 MACRO_BLACKOUT_PRE = 5  # minutes before Tier-1 event
@@ -125,5 +125,9 @@ RATE_CRITICAL_DAYS = 365
 # because it changes weekly (every Tuesday RBI auction)
 # while transaction cost rates change only via circulars.
 # Update RFR_LAST_UPDATED_DATE after every rate update.
-RFR_LAST_UPDATED_DATE = date(2026, 4, 17)
+RFR_LAST_UPDATED_DATE = date(2026, 4, 27)
 RFR_STALE_DAYS = 10
+
+# Edit any file in Antigravity locally
+# Push to VM: scp ~/Desktop/nifty_bot/path/to/file.py nifty-vm:/home/goyallavanya431/Nifty_Options_trading_bot/path/to/file.py
+# Restart bot: ssh nifty-vm "sudo systemctl restart nifty-bot"

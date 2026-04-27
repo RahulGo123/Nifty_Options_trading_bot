@@ -37,7 +37,7 @@ class MarketScheduler:
         self._session_ended: bool = False
         self._morning_fired: bool = False
         self._afternoon_fired: bool = False
-        self._prev_oi_data: dict = {} # For change-in-OI (PCR)
+        self._prev_oi_data: dict = {}  # For change-in-OI (PCR)
 
         self.heartbeat_counter = None
         self.shutdown_event = None
@@ -49,6 +49,7 @@ class MarketScheduler:
 
         # --- NEW: EOD Reporting Accumulators ---
         from monitoring.reporter import RegimeLog
+
         self.regime_log = RegimeLog()
         # ---------------------------------------
 
@@ -248,6 +249,12 @@ class MarketScheduler:
 
         self.auth_engine = auth_engine
 
+        # Sync real Dhan balance to disk before session initializes
+        from utils.live_sync import sync_balance_from_dhan
+        from config.settings import settings
+
+        await sync_balance_from_dhan(auth_engine, settings, is_premarket=True)
+
         logger.info("[SCHEDULER] Step 2/5: Scrip Master parse...")
         headers = auth_engine.get_headers()
         spot_approx = await self._fetch_spot_approximation()
@@ -262,6 +269,7 @@ class MarketScheduler:
         # --- NEW: PERSISTENT CAPITAL LOAD ---
         import json
         import os
+
         account_balance = settings.total_capital
         state_path = os.path.join("data", "capital_state.json")
         if os.path.exists(state_path):
@@ -273,18 +281,24 @@ class MarketScheduler:
                     if last_updated_str:
                         last_date = datetime.fromisoformat(last_updated_str).date()
                         if last_date < date.today():
-                            logger.info("[SCHEDULER] New day detected. Resetting session flags.")
+                            logger.info(
+                                "[SCHEDULER] New day detected. Resetting session flags."
+                            )
                             self._morning_fired = False
                             self._afternoon_fired = False
                         else:
                             self._morning_fired = state.get("morning_fired", False)
                             self._afternoon_fired = state.get("afternoon_fired", False)
-                    
+
                     account_balance = state.get("final_balance", account_balance)
-                
-                logger.info(f"[SCHEDULER] Loaded persistent capital: ₹{account_balance:,.2f} | Morning: {self._morning_fired} | Afternoon: {self._afternoon_fired}")
+
+                logger.info(
+                    f"[SCHEDULER] Loaded persistent capital: ₹{account_balance:,.2f} | Morning: {self._morning_fired} | Afternoon: {self._afternoon_fired}"
+                )
             except Exception as e:
-                logger.warning(f"[SCHEDULER] Failed to load persistent capital: {e}. Using .env default.")
+                logger.warning(
+                    f"[SCHEDULER] Failed to load persistent capital: {e}. Using .env default."
+                )
         # ------------------------------------
 
         ok = await scrip_master_parser.parse_and_load(
@@ -320,10 +334,16 @@ class MarketScheduler:
                 "SELECT iv_close FROM iv_history WHERE symbol = 'NIFTY' ORDER BY date DESC LIMIT 252"
             )
             # Database returns newest first (DESC), IVREngine expects oldest first
-            vix_history = [float(r['iv_close']) for r in reversed(rows) if r['iv_close'] is not None]
+            vix_history = [
+                float(r["iv_close"])
+                for r in reversed(rows)
+                if r["iv_close"] is not None
+            ]
             ivr_engine.bootstrap(vix_history)
         except Exception as exc:
-            logger.warning(f"[SCHEDULER] IVR bootstrap failed: {exc}. Initializing with empty history.")
+            logger.warning(
+                f"[SCHEDULER] IVR bootstrap failed: {exc}. Initializing with empty history."
+            )
             ivr_engine.bootstrap([])
 
         logger.info("[SCHEDULER] Step 4/5: Macro event calendar fetch...")
@@ -389,7 +409,7 @@ class MarketScheduler:
             # 2. Format the payload for Dhan's API
             payload = {
                 "NSE_FNO": tokens,
-                "NSE_IDX": [21] # Add India VIX (Dhan ID: 21)
+                "NSE_IDX": [21],  # Add India VIX (Dhan ID: 21)
             }
 
             # 3. Fire the asynchronous REST request
@@ -445,11 +465,12 @@ class MarketScheduler:
 
             # 5. Extract VIX if present
             indices = data.get("data", {}).get("NSE_IDX", {})
-            vix_data = indices.get("21") # India VIX (Dhan ID: 21)
+            vix_data = indices.get("21")  # India VIX (Dhan ID: 21)
             if vix_data:
                 vix_lp = vix_data.get("last_price", 0.0)
                 if vix_lp > 0:
                     from analytics.ivr_engine import ivr_engine
+
                     ivr_engine.update(vix_lp, datetime.now())
                     logger.info(f"[SCHEDULER] VIX seeded from REST snapshot: {vix_lp}")
 
@@ -458,7 +479,9 @@ class MarketScheduler:
                 await self._job_update_live_greeks()
                 logger.info("[MAIN] Hot Boot: Initial Greeks calculated.")
             except Exception as e:
-                logger.debug(f"[MAIN] Hot Boot Greeks failed (normal if no positions): {e}")
+                logger.debug(
+                    f"[MAIN] Hot Boot Greeks failed (normal if no positions): {e}"
+                )
 
         except Exception as exc:
             logger.error(f"[SCHEDULER] Snapshot seeding failed: {exc}")
@@ -469,6 +492,7 @@ class MarketScheduler:
         using the vectorized GreeksEngine.
         """
         from risk.portfolio_state import portfolio_state
+
         if portfolio_state.position_count == 0:
             return
 
@@ -481,17 +505,21 @@ class MarketScheduler:
         try:
             # 1. Prepare Market Context
             nifty = runtime_config.instruments.get("NIFTY")
-            if not nifty: return
-            
+            if not nifty:
+                return
+
             from analytics.vwap_engine import vwap_engine
+
             spot = vwap_engine.last_price
-            if spot <= 0: return
+            if spot <= 0:
+                return
 
             # Calculate time to expiry in years
             now = datetime.now()
             expiry_dt = datetime.combine(nifty.next_expiry, time(15, 30))
             time_to_expiry = (expiry_dt - now).total_seconds() / (365 * 24 * 3600)
-            if time_to_expiry <= 0: return
+            if time_to_expiry <= 0:
+                return
 
             # 2. Process each position
             for pid, pos in portfolio_state.open_positions.items():
@@ -503,24 +531,29 @@ class MarketScheduler:
                 # Aggregate data for all legs in this position
                 # Note: Assuming pos has a 'legs' attribute or we use strikes directly
                 # In our case, Position stores long_strike and short_strike.
-                
+
                 # Short Leg
-                s_prices = market_data_store.get_prices(pos.short_strike, pos.option_type)
+                s_prices = market_data_store.get_prices(
+                    pos.short_strike, pos.option_type
+                )
                 if s_prices:
                     strikes.append(float(pos.short_strike))
                     premiums.append(s_prices.get("mid", 0.0))
                     types.append(pos.option_type)
-                    actions.append(-1) # Short
+                    actions.append(-1)  # Short
 
                 # Long Leg
-                l_prices = market_data_store.get_prices(pos.long_strike, pos.option_type)
+                l_prices = market_data_store.get_prices(
+                    pos.long_strike, pos.option_type
+                )
                 if l_prices:
                     strikes.append(float(pos.long_strike))
                     premiums.append(l_prices.get("mid", 0.0))
                     types.append(pos.option_type)
-                    actions.append(1) # Long
+                    actions.append(1)  # Long
 
-                if len(strikes) < 2: continue
+                if len(strikes) < 2:
+                    continue
 
                 # 3. Compute Greeks for the batch
                 results = greeks_engine.compute_batch(
@@ -528,14 +561,14 @@ class MarketScheduler:
                     strikes=np.array(strikes),
                     premiums=np.array(premiums),
                     option_types=np.array(types),
-                    time_to_expiry=time_to_expiry
+                    time_to_expiry=time_to_expiry,
                 )
 
                 # 4. Aggregate Net Greeks (Action-weighted)
                 # action: -1 for Sell, +1 for Buy
                 net_delta = 0.0
                 net_theta = 0.0
-                
+
                 for i in range(len(actions)):
                     net_delta += results["delta"][i] * actions[i] * pos.lots
                     net_theta += results["theta"][i] * actions[i] * pos.lots
@@ -544,9 +577,9 @@ class MarketScheduler:
                 portfolio_state.update_greeks(
                     position_id=pid,
                     net_delta=net_delta,
-                    net_gamma=0.0, # Optional: can add later
+                    net_gamma=0.0,  # Optional: can add later
                     net_theta=net_theta,
-                    net_vega=0.0
+                    net_vega=0.0,
                 )
 
         except Exception as e:
@@ -570,15 +603,22 @@ class MarketScheduler:
         # --- NEW: Compound Capital Initialization ---
         try:
             from persistence.database import fetchrow
+
             last_session = await fetchrow(
                 "SELECT starting_capital, ending_pnl FROM sessions ORDER BY date DESC LIMIT 1"
             )
             if last_session:
-                compounded_capital = float(last_session['starting_capital']) + float(last_session['ending_pnl'])
-                logger.info(f"[SCHEDULER] Compounded capital fetched: ₹{compounded_capital:,.2f}")
+                compounded_capital = float(last_session["starting_capital"]) + float(
+                    last_session["ending_pnl"]
+                )
+                logger.info(
+                    f"[SCHEDULER] Compounded capital fetched: ₹{compounded_capital:,.2f}"
+                )
             else:
                 compounded_capital = settings.total_capital
-                logger.info(f"[SCHEDULER] No previous session. Using default capital: ₹{compounded_capital:,.2f}")
+                logger.info(
+                    f"[SCHEDULER] No previous session. Using default capital: ₹{compounded_capital:,.2f}"
+                )
         except Exception as e:
             logger.error(f"[SCHEDULER] Failed to fetch compounded capital: {e}")
             compounded_capital = settings.total_capital
@@ -591,20 +631,24 @@ class MarketScheduler:
         # --- NEW: DB Session Initialization ---
         try:
             from persistence.database import fetchrow, execute
+
             today = date.today()
-            
+
             # Check if session already exists (e.g. on restart)
             row = await fetchrow("SELECT id FROM sessions WHERE date = $1", today)
             if not row:
                 await execute(
                     "INSERT INTO sessions (date, starting_capital) VALUES ($1, $2)",
-                    today, compounded_capital
+                    today,
+                    compounded_capital,
                 )
                 row = await fetchrow("SELECT id FROM sessions WHERE date = $1", today)
-            
+
             if row:
-                portfolio_state._session_id = row['id']
-                logger.info(f"[SCHEDULER] DB Session ID resolved: {portfolio_state._session_id}")
+                portfolio_state._session_id = row["id"]
+                logger.info(
+                    f"[SCHEDULER] DB Session ID resolved: {portfolio_state._session_id}"
+                )
         except Exception as e:
             logger.error(f"[SCHEDULER] Failed to initialize DB session: {e}")
         # --------------------------------------
@@ -621,8 +665,12 @@ class MarketScheduler:
         from analytics.vwap_engine import vwap_engine
 
         vwap_engine.reset()
-        logger.info("[SCHEDULER] VWAP engine reset and firing flags cleared for new session.")
-        logger.info("[SCHEDULER] VWAP engine reset and firing flags cleared for new session.")
+        logger.info(
+            "[SCHEDULER] VWAP engine reset and firing flags cleared for new session."
+        )
+        logger.info(
+            "[SCHEDULER] VWAP engine reset and firing flags cleared for new session."
+        )
         # -----------------------------------------------------------------
 
         # --- THE FIX: Inject the REST Snapshot before evaluating signals ---
@@ -642,10 +690,12 @@ class MarketScheduler:
 
         # --- THE HOT-BOOT FIX: If we start mid-day, check if PCR should be active now ---
         if datetime.now().time() >= PCR_ACTIVATION_TIME:
-            logger.info("[SCHEDULER] Catching up: Current time is past activation window. Activating PCR Engine now.")
+            logger.info(
+                "[SCHEDULER] Catching up: Current time is past activation window. Activating PCR Engine now."
+            )
             await self._job_activate_pcr()
             await self._job_refresh_margin()
-            
+
         # --- THE SCIENTIFIC ATR SEED: Runs every boot to ensure sizer is ready ---
         if nifty:
             await self._seed_atr_engine(nifty)
@@ -669,20 +719,20 @@ class MarketScheduler:
             if atm_strike is None:
                 return
 
-            interval = nifty.strike_interval            # 50
-            width_pts = SPREAD_WIDTH * interval          # 300
+            interval = nifty.strike_interval  # 50
+            width_pts = SPREAD_WIDTH * interval  # 300
 
             # Iron Condor legs (Calculate all 4 for true portfolio margin)
             short_ce = atm_strike + interval
-            long_ce  = short_ce   + width_pts
+            long_ce = short_ce + width_pts
             short_pe = atm_strike - interval
-            long_pe  = short_pe   - width_pts
+            long_pe = short_pe - width_pts
 
             tokens = nifty.instrument_tokens
             t_short_ce = tokens.get(short_ce, {}).get("CE")
-            t_long_ce  = tokens.get(long_ce,  {}).get("CE")
+            t_long_ce = tokens.get(long_ce, {}).get("CE")
             t_short_pe = tokens.get(short_pe, {}).get("PE")
-            t_long_pe  = tokens.get(long_pe,  {}).get("PE")
+            t_long_pe = tokens.get(long_pe, {}).get("PE")
 
             if not all([t_short_ce, t_long_ce, t_short_pe, t_long_pe]):
                 logger.warning(
@@ -695,9 +745,9 @@ class MarketScheduler:
                 lot_size=nifty.lot_size,
                 legs=[
                     {"token": str(t_short_ce), "action": "SELL"},
-                    {"token": str(t_long_ce),  "action": "BUY"},
+                    {"token": str(t_long_ce), "action": "BUY"},
                     {"token": str(t_short_pe), "action": "SELL"},
-                    {"token": str(t_long_pe),  "action": "BUY"},
+                    {"token": str(t_long_pe), "action": "BUY"},
                 ],
             )
 
@@ -787,6 +837,7 @@ class MarketScheduler:
             oi_wall_scanner.update(atm_strike, current_oi)
 
             from analytics.pcr_engine import pcr_engine
+
             pcr_engine.update_spot(atm_strike)
 
             # Calculate change-in-OI (delta) since last run
@@ -796,7 +847,11 @@ class MarketScheduler:
                     delta_types = {}
                     for opt, total_dict in types.items():
                         curr_val = total_dict.get("total_oi", 0)
-                        prev_val = self._prev_oi_data.get(strike, {}).get(opt, {}).get("total_oi", 0)
+                        prev_val = (
+                            self._prev_oi_data.get(strike, {})
+                            .get(opt, {})
+                            .get("total_oi", 0)
+                        )
                         # --- IMPROVEMENT: Include unwinding (Negative Changes) for board market view ---
                         delta_types[opt] = curr_val - prev_val
                     oi_delta[strike] = delta_types
@@ -823,7 +878,7 @@ class MarketScheduler:
 
     async def _job_eod_reporting_and_kill(self) -> None:
         """
-        Runs at 15:10 PM. 
+        Runs at 15:10 PM.
         - Liquidates and Reports ONLY if it is an Expiry Day.
         """
         logger.info("[SCHEDULER] ⏰ 03:10 — Expiry Check initiated.")
@@ -832,6 +887,7 @@ class MarketScheduler:
         is_expiry = False
         try:
             from data.runtime_config import runtime_config
+
             nifty = runtime_config.instruments.get("NIFTY")
             is_expiry = nifty and nifty.next_expiry == date.today()
         except Exception as e:
@@ -839,17 +895,19 @@ class MarketScheduler:
 
         # 2. Hard Kill and Report only on Expiry
         if is_expiry:
-            logger.info("[SCHEDULER] Expiry day detected: Triggering Hard Kill and EOD Report.")
+            logger.info(
+                "[SCHEDULER] Expiry day detected: Triggering Hard Kill and EOD Report."
+            )
             if self.lifecycle_manager:
                 await self.lifecycle_manager._hard_kill()
-            
+
             await self._generate_and_dispatch_report()
         else:
             logger.info("[SCHEDULER] Non-expiry day: Reporting deferred to 15:30.")
 
     async def _job_final_shutdown(self) -> None:
         """
-        Runs at 15:30 PM. 
+        Runs at 15:30 PM.
         - Reports if not already done (non-expiry).
         - Final system shutdown.
         """
@@ -857,9 +915,11 @@ class MarketScheduler:
             return
 
         logger.info("[SCHEDULER] ⏰ 03:30 — Final system shutdown sequence.")
-        
+
         if not self._report_sent:
-            logger.info("[SCHEDULER] Report safety net triggered: Generating final session report.")
+            logger.info(
+                "[SCHEDULER] Report safety net triggered: Generating final session report."
+            )
             await self._generate_and_dispatch_report()
 
         self._session_ended = True
@@ -875,7 +935,7 @@ class MarketScheduler:
 
         if self.lifecycle_manager:
             await self.lifecycle_manager.stop()
-        
+
         if self.ws_manager:
             await self.ws_manager.stop()
 
@@ -888,6 +948,7 @@ class MarketScheduler:
         # 3. Save EOD IV
         try:
             from data.market_data_store import market_data_store
+
             atm_iv_close = market_data_store.get_index("INDIA_VIX")
             if atm_iv_close > 0:
                 await ivr_engine.end_of_day(atm_iv_close)
@@ -905,15 +966,28 @@ class MarketScheduler:
     async def _generate_and_dispatch_report(self) -> None:
         """Consolidated logic to generate and send the Telegram report."""
         from risk.portfolio_state import portfolio_state
-        from monitoring.reporter import dispatch_eod_report, SessionSummary, ClosedTrade, CarryPosition
+        from monitoring.reporter import (
+            dispatch_eod_report,
+            SessionSummary,
+            ClosedTrade,
+            CarryPosition,
+        )
         from persistence.write_buffer import write_buffer
         from analytics.ivr_engine import ivr_engine
         from decouple import config
 
         try:
             # 1. Calculate Session Stats for DB
-            wins = sum(1 for t in portfolio_state._closed_positions.values() if t.realized_pnl > 0)
-            losses = sum(1 for t in portfolio_state._closed_positions.values() if t.realized_pnl <= 0)
+            wins = sum(
+                1
+                for t in portfolio_state._closed_positions.values()
+                if t.realized_pnl > 0
+            )
+            losses = sum(
+                1
+                for t in portfolio_state._closed_positions.values()
+                if t.realized_pnl <= 0
+            )
             total = wins + losses
             win_rate = (wins / total * 100) if total > 0 else 0.0
 
@@ -966,12 +1040,12 @@ class MarketScheduler:
                         strategy=pos.spread_type,
                         strikes=strikes_desc,
                         lots=pos.lots,
-                        unrealized_pnl=pos.unrealized_pnl
+                        unrealized_pnl=pos.unrealized_pnl,
                     )
                 )
                 total_upnl += pos.unrealized_pnl
 
-            # 4. Dispatch
+                # 4. Dispatch
                 summary = SessionSummary(
                     session_date=date.today(),
                     starting_capital=portfolio_state._starting_capital,
@@ -981,13 +1055,15 @@ class MarketScheduler:
                     total_unrealized_pnl=total_upnl,
                     regime_log=self.regime_log,
                     circuit_breaker_tripped=portfolio_state.circuit_breaker_tripped,
-                    new_trades_count=portfolio_state._new_trades_count
+                    new_trades_count=portfolio_state._new_trades_count,
                 )
             dispatch_eod_report(summary)
             self._report_sent = True
             logger.info("[SCHEDULER] EOD Report successfully dispatched.")
         except Exception as exc:
-            logger.error(f"[SCHEDULER] Failed to generate/dispatch report: {exc}", exc_info=True)
+            logger.error(
+                f"[SCHEDULER] Failed to generate/dispatch report: {exc}", exc_info=True
+            )
 
     async def _job_heartbeat(self) -> None:
         if self.heartbeat_counter is not None:
@@ -999,10 +1075,11 @@ class MarketScheduler:
         """Tracks time spent in each IVR regime for the EOD report."""
         if not self._market_open:
             return
-            
+
         from analytics.ivr_engine import ivr_engine
+
         regime = ivr_engine.regime
-        
+
         if regime == "CREDIT":
             self.regime_log.credit_minutes += 1
         elif regime == "DEBIT":
@@ -1038,10 +1115,12 @@ class MarketScheduler:
         """
         The Main Execution Loop — matches backtest_engine.py exactly.
 
-        On confirmation: submit the specific 2-leg spread (CREDIT_PUT or CREDIT_CALL) 
+        On confirmation: submit the specific 2-leg spread (CREDIT_PUT or CREDIT_CALL)
         based on the directional bias (BULLISH/BEARISH). Identical to the backtest.
         """
-        logger.info("[SCHEDULER] Signal evaluation loop running (Vertical Spread mode — matches backtest).")
+        logger.info(
+            "[SCHEDULER] Signal evaluation loop running (Vertical Spread mode — matches backtest)."
+        )
 
         while self._market_open and not self._session_ended:
             await asyncio.sleep(SIGNAL_EVAL_INTERVAL)
@@ -1078,7 +1157,12 @@ class MarketScheduler:
                     is_expiry_day=is_expiry_day
                 )
                 if not allowed:
-                    _silent = ("BLACKOUT", "OUTSIDE_EXECUTION_WINDOW", "GAP_TRACKER", "EXPIRY_DAY_CUTOFF_REACHED")
+                    _silent = (
+                        "BLACKOUT",
+                        "OUTSIDE_EXECUTION_WINDOW",
+                        "GAP_TRACKER",
+                        "EXPIRY_DAY_CUTOFF_REACHED",
+                    )
                     if not any(s in reason for s in _silent):
                         logger.warning("[SIGNAL] Pre-execution blocked: {}", reason)
                     else:
@@ -1151,11 +1235,13 @@ class MarketScheduler:
                     logger.info(
                         "[SIGNAL] IRON CONDOR submitted. ATM: {} | IVR: {} | Status: OK",
                         atm_strike,
-                        ivr_engine.ivr
+                        ivr_engine.ivr,
                     )
                     await asyncio.sleep(5)
                 else:
-                    logger.debug(f"[SIGNAL] Filtered: PE({reason_put}) | CE({reason_call})")
+                    logger.debug(
+                        f"[SIGNAL] Filtered: PE({reason_put}) | CE({reason_call})"
+                    )
 
             except asyncio.CancelledError:
                 break
@@ -1173,13 +1259,14 @@ class MarketScheduler:
         """Persists the capital and session fire status to disk."""
         import json
         import os
+
         state_path = os.path.join("data", "capital_state.json")
         try:
             state = {
                 "last_updated": datetime.now().isoformat(),
                 "final_balance": final_balance,
                 "morning_fired": self._morning_fired,
-                "afternoon_fired": self._afternoon_fired
+                "afternoon_fired": self._afternoon_fired,
             }
             with open(state_path, "w") as f:
                 json.dump(state, f, indent=4)
@@ -1265,7 +1352,6 @@ class MarketScheduler:
         interval = nifty.strike_interval
         return int(round(ltp / interval) * interval)
 
-
     def _collect_market_data(self, nifty) -> dict:
         from data.market_data_store import market_data_store
 
@@ -1312,10 +1398,14 @@ class MarketScheduler:
             }
 
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload, timeout=15) as resp:
+                async with session.post(
+                    url, headers=headers, json=payload, timeout=15
+                ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        logger.info(f"[SCHEDULER] ATR Seed API returned {len(data.get('timestamp', []))} candles.")
+                        logger.info(
+                            f"[SCHEDULER] ATR Seed API returned {len(data.get('timestamp', []))} candles."
+                        )
                         ts = data.get("timestamp", [])
                         opens = data.get("open", [])
                         highs = data.get("high", [])
@@ -1324,21 +1414,27 @@ class MarketScheduler:
 
                         candles = []
                         for i in range(len(ts)):
-                            candles.append({
-                                "open": float(opens[i]),
-                                "high": float(highs[i]),
-                                "low": float(lows[i]),
-                                "close": float(closes[i])
-                            })
+                            candles.append(
+                                {
+                                    "open": float(opens[i]),
+                                    "high": float(highs[i]),
+                                    "low": float(lows[i]),
+                                    "close": float(closes[i]),
+                                }
+                            )
 
                         if len(candles) >= 2:
                             # Feed to engine
                             atr_engine.seed_candles(candles)
                         else:
-                            logger.warning("[SCHEDULER] Not enough historical candles for ATR seeding. Falls back to default.")
+                            logger.warning(
+                                "[SCHEDULER] Not enough historical candles for ATR seeding. Falls back to default."
+                            )
                     else:
                         resp_text = await resp.text()
-                        logger.warning(f"[SCHEDULER] ATR seed API failed: {resp.status}. Response: {resp_text[:100]}. Falls back to default.")
+                        logger.warning(
+                            f"[SCHEDULER] ATR seed API failed: {resp.status}. Response: {resp_text[:100]}. Falls back to default."
+                        )
 
         except Exception as e:
             logger.error(f"[SCHEDULER] ATR seeding process error: {e}", exc_info=True)
