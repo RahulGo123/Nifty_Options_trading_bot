@@ -46,6 +46,7 @@ class MarketScheduler:
         self.lifecycle_manager = None
         self.worker_process = None
         self._report_sent: bool = False
+        self._premarket_done = False
 
         # --- NEW: EOD Reporting Accumulators ---
         from monitoring.reporter import RegimeLog
@@ -227,6 +228,10 @@ class MarketScheduler:
         logger.info("[SCHEDULER] {} jobs registered.", len(self._scheduler.get_jobs()))
 
     async def _job_premarket_init(self) -> None:
+        if self._premarket_done:
+            logger.info("[SCHEDULER] Pre-market init already done. Skipping duplicate.")
+            return
+        self._premarket_done = True
         logger.info("[SCHEDULER] ⏰ 08:45 — Pre-market init starting...")
 
         from auth.dhan_auth import auth_engine
@@ -901,7 +906,8 @@ class MarketScheduler:
             if self.lifecycle_manager:
                 await self.lifecycle_manager._hard_kill()
 
-            await self._generate_and_dispatch_report()
+            if not self._report_sent:
+                await self._generate_and_dispatch_report()
         else:
             logger.info("[SCHEDULER] Non-expiry day: Reporting deferred to 15:30.")
 

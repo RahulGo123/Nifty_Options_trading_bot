@@ -5,6 +5,7 @@ DhanHQ Live Market Feed WebSocket Manager.
 Bridges Dhan's synchronous thread-based callbacks into the asyncio event loop.
 """
 
+from auth.dhan_auth import auth_engine
 import asyncio
 import time
 from datetime import datetime
@@ -50,7 +51,8 @@ class WebSocketManager:
                 self._feed_watchdog(), name="dhan_ws_sentinel"
             )
 
-        # Start queue consumer to drain options/futures queues into market_data_store
+        # Start queue consumer to drain options/futures queues into
+        # market_data_store
         if self._consumer_task is None or self._consumer_task.done():
             self._consumer_task = asyncio.create_task(
                 self._consume_queues(), name="tick_queue_consumer"
@@ -139,10 +141,12 @@ class WebSocketManager:
 
         from dhanhq import marketfeed
 
-        # Options in Quote mode to receive OI + Bid/Ask. Futures in Ticker mode (LTP only for VWAP).
+        # Options in Quote mode to receive OI + Bid/Ask. Futures in Ticker mode
+        # (LTP only for VWAP).
         instruments_list = []
         for t in tokens:
-            instruments_list.append((marketfeed.NSE_FNO, str(t), marketfeed.Quote))
+            instruments_list.append(
+                (marketfeed.NSE_FNO, str(t), marketfeed.Quote))
         # Add INDIA VIX — Ticker only (LTP is enough)
         # Reverting to Segment 0 (NSE) as per scrip master
         instruments_list.append((0, "21", marketfeed.Ticker))
@@ -174,21 +178,27 @@ class WebSocketManager:
                 )
 
                 self._feed.run_forever()  # Connects the WebSocket
-                
+
                 self._last_tick_time = time.time()
                 self._connected = True
-                
+
                 # --- NEW: Recovery Alert ---
-                asyncio.run_coroutine_threadsafe(send_alert("⚡ FEED RECOVERED: Dhan WebSocket re-connected. Market data is flowing again."), self._loop)
-                logger.info("[WS MANAGER] DhanFeed connected. Entering polling loop.")
+                asyncio.run_coroutine_threadsafe(
+                    send_alert("⚡ FEED RECOVERED: Dhan WebSocket re-connected. Market data is flowing again."),
+                    self._loop)
+                logger.info(
+                    "[WS MANAGER] DhanFeed connected. Entering polling loop.")
 
                 while self._running:
                     try:
                         response = self._feed.get_data()
                         if response:
                             self._on_message(None, response)
+                        else:
+                            time.sleep(0.005)
                     except Exception as poll_err:
-                        logger.warning(f"[WS DIAGNOSTIC] Polling error: {poll_err}")
+                        logger.warning(
+                            f"[WS DIAGNOSTIC] Polling error: {poll_err}")
                         break
 
                 logger.warning("[WS MANAGER] Polling loop exited.")
@@ -260,7 +270,8 @@ class WebSocketManager:
                         elif token == str(
                             runtime_config.instruments.get("NIFTY").futures_token
                         ):
-                            # Nifty Futures tick — feed VWAP, trigger gate, and price store
+                            # Nifty Futures tick — feed VWAP, trigger gate, and
+                            # price store
                             price = float(tick.get("ltp", 0.0))
                             cumvol = float(
                                 tick.get("volume", 0)
@@ -272,7 +283,8 @@ class WebSocketManager:
                                     timestamp=datetime.now(),
                                     direction=pcr_engine.signal,
                                 )
-                                # Keep market_data_store current so _compute_atm() is live
+                                # Keep market_data_store current so
+                                # _compute_atm() is live
                                 market_data_store.update(
                                     strike=int(token),
                                     option_type="FUT",
@@ -322,8 +334,7 @@ class WebSocketManager:
                     self.is_feed_stale = True
                     logger.critical(
                         f"[WEBSOCKET] DEAD MAN SWITCH TRIGGERED! "
-                        f"No data received for {time_since_last_tick:.1f} seconds."
-                    )
+                        f"No data received for {time_since_last_tick:.1f} seconds.")
 
                     await send_alert(
                         f"🚨 <b>CRITICAL: DATA FEED DEAD</b>\n"
@@ -335,7 +346,8 @@ class WebSocketManager:
                     if self._feed:
                         try:
                             # In v2, disconnect() is an async coroutine.
-                            # We just sever the reference and let the background thread die cleanly.
+                            # We just sever the reference and let the
+                            # background thread die cleanly.
                             self._feed = None
                         except Exception:
                             pass
@@ -351,6 +363,5 @@ class WebSocketManager:
 
 
 # Single instance
-from auth.dhan_auth import auth_engine
 
 ws_manager = WebSocketManager(auth_engine=auth_engine)

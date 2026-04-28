@@ -228,6 +228,18 @@ async def _shutdown() -> None:
     except Exception as exc:
         logger.warning("[MAIN] Alerter stop error: %s", exc)
 
+    # --- THE PROCESS REAPER: Kill Zombie Subprocesses ---
+    import multiprocessing
+    active_children = multiprocessing.active_children()
+    if active_children:
+        logger.info(f"[MAIN] Cleaning up {len(active_children)} child processes...")
+        for child in active_children:
+            logger.info(f"[MAIN] Terminating {child.name} (PID: {child.pid})")
+            child.terminate()
+            # Wait up to 2s for clean exit, then move on
+            child.join(timeout=2)
+    # ----------------------------------------------------
+
     logger.info("[MAIN] Shutdown complete.")
     # Final 1s grace sleep for any lingering OS file descriptors
     await asyncio.sleep(1)
