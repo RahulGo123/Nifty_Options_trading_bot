@@ -210,6 +210,7 @@ async def _shutdown() -> None:
     # Close database write buffer (flushes remaining records)
     try:
         from persistence.write_buffer import write_buffer
+
         await write_buffer.stop()
     except Exception as exc:
         logger.warning("[MAIN] Write buffer stop error: %s", exc)
@@ -224,12 +225,14 @@ async def _shutdown() -> None:
     # Close Telegram Alerter (drains final reports)
     try:
         from monitoring.alerting import stop_alerter
+
         await stop_alerter()
     except Exception as exc:
         logger.warning("[MAIN] Alerter stop error: %s", exc)
 
     # --- THE PROCESS REAPER: Kill Zombie Subprocesses ---
     import multiprocessing
+
     active_children = multiprocessing.active_children()
     if active_children:
         logger.info(f"[MAIN] Cleaning up {len(active_children)} child processes...")
@@ -353,6 +356,7 @@ async def main() -> None:
 
         # 4. Activate PCR Gate and trigger immediate IVR calculation
         from config.constants import PCR_ACTIVATION_TIME
+
         if current_time >= PCR_ACTIVATION_TIME:
             try:
                 await market_scheduler._job_activate_pcr()
@@ -362,9 +366,28 @@ async def main() -> None:
                 await market_scheduler._job_ivr_update()
                 await market_scheduler._job_oi_wall_update()
                 logger.info("[MAIN] Hot Boot: Initial IVR and PCR snapshots captured.")
-                # --- NEW: Immediate Exit if past Hard Kill time ---
-                if current_time >= time(15, 10):
-                    logger.warning("[MAIN] Past 03:10 PM. Checking for smart expiry liquidation...")
+                # --- NEW: Immediate Exit if past specific cutoffs ---
+                is_expiry = False
+                try:
+                    from data.runtime_config import runtime_config
+
+                    nifty = runtime_config.instruments.get("NIFTY")
+                    is_expiry = nifty and nifty.next_expiry == date.today()
+                except:
+                    pass
+
+                # Handle 1:30 PM Expiry Exit recovery
+                if is_expiry and current_time >= time(13, 30):
+                    logger.warning(
+                        "[MAIN] Recovery: Past 01:30 PM on Expiry. Triggering exit check..."
+                    )
+                    await market_scheduler._job_expiry_exit()
+
+                # Handle 3:10 PM Hard Kill recovery
+                elif current_time >= time(15, 10):
+                    logger.warning(
+                        "[MAIN] Recovery: Past 03:10 PM. Triggering final liquidation..."
+                    )
                     await market_scheduler._job_eod_reporting_and_kill()
 
             except Exception as e:
@@ -411,39 +434,56 @@ def _log_health_status() -> None:
 
     try:
         now_str = datetime.now().strftime("%H:%M:%S")
-        spot   = vwap_engine.last_price
-        vwap   = vwap_engine.value
-        vix    = ivr_engine.current_iv
-        atr    = atr_engine.atr
+        spot = vwap_engine.last_price
+        vwap = vwap_engine.value
+        vix = ivr_engine.current_iv
+        atr = atr_engine.atr
         margin = margin_cache.get()
-        n_pos  = portfolio_state.position_count
-        upnl   = sum(p.unrealized_pnl for p in portfolio_state.open_positions.values())
-        rpnl   = portfolio_state.realized_pnl
-        daily  = portfolio_state.daily_pnl
+        n_pos = portfolio_state.position_count
+        upnl = sum(p.unrealized_pnl for p in portfolio_state.open_positions.values())
+        rpnl = portfolio_state.realized_pnl
+        daily = portfolio_state.daily_pnl
 
         # Expiry status
         try:
             from data.runtime_config import runtime_config
+
             nifty = runtime_config.instruments.get("NIFTY")
-            exp_str = nifty.next_expiry.strftime("%b %d") if nifty and nifty.next_expiry else "Unknown"
+            exp_str = (
+                nifty.next_expiry.strftime("%b %d")
+                if nifty and nifty.next_expiry
+                else "Unknown"
+            )
         except:
             exp_str = "Unknown"
 
         # Gate status
         vix_gate = "✅" if 11.0 <= vix <= 22.0 else "❌"
-        vwap_gate= "✅" if vwap > 0 and spot > 0 and abs(spot - vwap) / vwap <= 0.0045 else "—"
-        morn_f   = "FIRED" if market_scheduler._morning_fired   else "open"
-        aftn_f   = "FIRED" if market_scheduler._afternoon_fired else "open"
+        vwap_gate = (
+            "✅" if vwap > 0 and spot > 0 and abs(spot - vwap) / vwap <= 0.0045 else "—"
+        )
+        morn_f = "FIRED" if market_scheduler._morning_fired else "open"
+        aftn_f = "FIRED" if market_scheduler._afternoon_fired else "open"
         # Sentiment
         from analytics.pcr_engine import pcr_engine
+
         pcr = pcr_engine.pcr
         bias = pcr_engine.signal
 
         # Calculate hedged free capital for dashboard
         try:
             from data.runtime_config import runtime_config
-            put_lots = sum(p.lots for p in portfolio_state.open_positions.values() if "PUT" in p.spread_type)
-            call_lots = sum(p.lots for p in portfolio_state.open_positions.values() if "CALL" in p.spread_type)
+
+            put_lots = sum(
+                p.lots
+                for p in portfolio_state.open_positions.values()
+                if "PUT" in p.spread_type
+            )
+            call_lots = sum(
+                p.lots
+                for p in portfolio_state.open_positions.values()
+                if "CALL" in p.spread_type
+            )
             margin_lots = max(put_lots, call_lots)
             free_cap = runtime_config.risk.total_capital - (margin_lots * margin)
             free_cap_str = f"₹{free_cap:,.2f}"
@@ -453,14 +493,14 @@ def _log_health_status() -> None:
         # RUN RATE CALCULATIONS
         total_theta = sum(p.net_theta for p in portfolio_state.open_positions.values())
         total_delta = sum(p.net_delta for p in portfolio_state.open_positions.values())
-        
+
         # Theta Velocity: ₹ per minute (24hr basis)
         theta_velocity = (total_theta * 65) / 1440
-        
+
         # Time remaining in session
         close_time = datetime.combine(date.today(), time(15, 30))
         mins_left = max(1, (close_time - datetime.now()).total_seconds() / 60)
-        
+
         # Session residual theta (if we assume 1 full daily theta is captured in 375 trading mins)
         # This matches the user's manual calculation logic
         theta_cash_day = total_theta * 65

@@ -193,6 +193,14 @@ class MarketScheduler:
         )
 
         self._scheduler.add_job(
+            self._job_expiry_exit,
+            CronTrigger(hour=13, minute=30, timezone="Asia/Kolkata"),
+            id="expiry_exit_1330",
+            name="Expiry Day Liquidator 01:30 PM",
+            max_instances=1,
+        )
+
+        self._scheduler.add_job(
             self._job_eod_reporting_and_kill,
             CronTrigger(hour=15, minute=10, timezone="Asia/Kolkata"),
             id="eod_report",
@@ -881,6 +889,21 @@ class MarketScheduler:
         except Exception as exc:
             logger.warning("[SCHEDULER] Macro SMA update failed: {}", exc)
 
+    async def _job_expiry_exit(self) -> None:
+        """Runs at 1:30 PM — Forces liquidation ONLY on Expiry Days."""
+        from data.runtime_config import runtime_config
+
+        nifty = runtime_config.instruments.get("NIFTY")
+
+        if nifty and nifty.next_expiry == date.today():
+            logger.warning(
+                "[SCHEDULER] 01:30 PM — Expiry Day detected. Triggering forced liquidation."
+            )
+            if self.lifecycle_manager:
+                await self.lifecycle_manager._hard_kill()
+        else:
+            logger.info("[SCHEDULER] 01:30 PM — Non-expiry day. Staying in position.")
+
     async def _job_eod_reporting_and_kill(self) -> None:
         """
         Runs at 15:10 PM.
@@ -1051,18 +1074,18 @@ class MarketScheduler:
                 )
                 total_upnl += pos.unrealized_pnl
 
-                # 4. Dispatch
-                summary = SessionSummary(
-                    session_date=date.today(),
-                    starting_capital=portfolio_state._starting_capital,
-                    live_trading=config("LIVE_TRADING", default=False, cast=bool),
-                    closed_trades=closed_trades_list,
-                    carry_over_positions=carry_over_list,
-                    total_unrealized_pnl=total_upnl,
-                    regime_log=self.regime_log,
-                    circuit_breaker_tripped=portfolio_state.circuit_breaker_tripped,
-                    new_trades_count=portfolio_state._new_trades_count,
-                )
+            # 4. Dispatch
+            summary = SessionSummary(
+                session_date=date.today(),
+                starting_capital=portfolio_state._starting_capital,
+                live_trading=config("LIVE_TRADING", default=False, cast=bool),
+                closed_trades=closed_trades_list,
+                carry_over_positions=carry_over_list,
+                total_unrealized_pnl=total_upnl,
+                regime_log=self.regime_log,
+                circuit_breaker_tripped=portfolio_state.circuit_breaker_tripped,
+                new_trades_count=portfolio_state._new_trades_count,
+            )
             dispatch_eod_report(summary)
             self._report_sent = True
             logger.info("[SCHEDULER] EOD Report successfully dispatched.")
