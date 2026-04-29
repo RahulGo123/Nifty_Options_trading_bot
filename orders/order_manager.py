@@ -19,6 +19,7 @@ from risk.reconciliation import reconciliation_engine
 from analytics.trade_logger import trade_logger
 from analytics.ivr_engine import ivr_engine
 from analytics.greeks_engine import greeks_engine
+from analytics.vwap_engine import vwap_engine
 
 
 class OrderManager:
@@ -90,7 +91,7 @@ class OrderManager:
         entry_analytics = {
             "ivr_at_entry": ivr_engine.ivr,
             "vix_at_entry": ivr_engine.current_iv,
-            "nifty_spot": market_data.get("spot", 0.0),
+            "nifty_spot": vwap_engine.last_price,
             "portfolio_delta": 0.0,
             "portfolio_theta": 0.0,
             "max_bid_ask_spread_pct": round(max_spread_pct, 2),
@@ -121,13 +122,23 @@ class OrderManager:
                 from execution.margin_cache import margin_cache
 
                 live_margin = margin_cache.get()
-                
+
                 # HEDGED MARGIN LOGIC: In an Iron Condor, 1 lot of Put + 1 lot of Call = 1 lot of Margin.
-                put_lots = sum(p.lots for p in portfolio_state.open_positions.values() if "PUT" in p.spread_type)
-                call_lots = sum(p.lots for p in portfolio_state.open_positions.values() if "CALL" in p.spread_type)
-                
+                put_lots = sum(
+                    p.lots
+                    for p in portfolio_state.open_positions.values()
+                    if "PUT" in p.spread_type
+                )
+                call_lots = sum(
+                    p.lots
+                    for p in portfolio_state.open_positions.values()
+                    if "CALL" in p.spread_type
+                )
+
                 margin_lots = max(put_lots, call_lots)
-                free_cap = runtime_config.risk.total_capital - (margin_lots * live_margin)
+                free_cap = runtime_config.risk.total_capital - (
+                    margin_lots * live_margin
+                )
 
                 buys = [l for l in basket["legs"] if l["action"] == "BUY"]
                 sells = [l for l in basket["legs"] if l["action"] == "SELL"]

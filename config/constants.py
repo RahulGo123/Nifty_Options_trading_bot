@@ -19,12 +19,12 @@ VWAP_PULLBACK_TOLERANCE = 0.0045  # 0.45% max distance from VWAP for entry
 # --- Exit Rules ---
 THETA_STAGNATION_MINUTES = 45
 THETA_MINIMUM_GAIN_PCT = 0.15  # 15% favourable move required
-PROFIT_TARGET = 1.0  # 100% Theta Harvester — captures full credit
+PROFIT_TARGET = 0.80  # 100% Theta Harvester — captures full credit
 THETA_DAYS = 5  # Multi-day holding period
 
 # --- Risk (Human Decisions) ---
 MAX_CONCURRENT_POSITIONS = 4  # 2 Iron Condors × 2 legs (CREDIT_PUT + CREDIT_CALL)
-RISK_PER_TRADE_PCT = 0.90  # 90% of account per trade
+RISK_PER_TRADE_PCT = 0.70  # 90% of account per trade
 CIRCUIT_BREAKER_PCT = 0.10  # 10% daily drawdown limit
 ATR_PERIOD = 14
 ATR_MULTIPLIER = 2.0  # Updated after backtest calibration
@@ -88,7 +88,7 @@ GST_RATE = 0.18
 # Source: RBI press release
 # Update after every Tuesday RBI T-bill auction:
 # rbi.org.in → Press Releases → Treasury Bill Auction Results
-DEFAULT_RISK_FREE_RATE = 0.053064
+DEFAULT_RISK_FREE_RATE = 0.0521
 
 # --- Macro Events ---
 MACRO_BLACKOUT_PRE = 5  # minutes before Tier-1 event
@@ -125,5 +125,5 @@ RATE_CRITICAL_DAYS = 365
 # because it changes weekly (every Tuesday RBI auction)
 # while transaction cost rates change only via circulars.
 # Update RFR_LAST_UPDATED_DATE after every rate update.
-RFR_LAST_UPDATED_DATE = date(2026, 4, 17)
+RFR_LAST_UPDATED_DATE = date(2026, 4, 27)
 RFR_STALE_DAYS = 10
